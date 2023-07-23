@@ -4,6 +4,7 @@ using JwtAPILecture.Models.DTOs;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
@@ -16,11 +17,11 @@ namespace JwtAPILecture.Controllers
     public class AuthenticationController : ControllerBase
     {
         private readonly UserManager<IdentityUser> _userManager;
-        private readonly JwtConfig _jwtConfig;
-        public AuthenticationController(UserManager<IdentityUser> userManager, JwtConfig jwtConfig)
+        private readonly IConfiguration _configuration;
+        public AuthenticationController(UserManager<IdentityUser> userManager, IConfiguration configuration)
         {
             _userManager = userManager;
-            _jwtConfig = jwtConfig;
+            _configuration = configuration;
         }
 
         [HttpPost]
@@ -75,11 +76,58 @@ namespace JwtAPILecture.Controllers
             return BadRequest();
         }
 
+        [Route("Login")]
+        [HttpPost]
+        public async Task<IActionResult> Login([FromBody] UserLoginRequestDto loginRequest)
+        {
+            if (ModelState.IsValid)
+            {
+                var existing_user = await _userManager.FindByEmailAsync(loginRequest.Email);
+
+                if (existing_user == null)
+                {
+                    return BadRequest(new AuthResult()
+                    {
+                        Result = false,
+                        Errors = new List<string>()
+                        {
+                            "Invalid payload"
+                        }
+                    });
+                }
+
+                var isCorrect = await _userManager.CheckPasswordAsync(existing_user, loginRequest.Password);
+
+                if (!isCorrect)
+                    return BadRequest(new AuthResult()
+                    {
+                        Errors = new List<string>()
+                        {
+                            "Invalid Credentials"
+                        },
+                        Result = false
+                    });
+
+                var jwtToken = GenerateJwtToken(existing_user);
+
+                return Ok(new AuthResult() { Result = true, Token = jwtToken });
+            }
+
+            return BadRequest(new AuthResult()
+            {
+                Errors = new List<string>()
+                {
+                    "Invalid payload"
+                },
+                Result = false
+            });
+        }
+
         private string GenerateJwtToken(IdentityUser user)
         {
             var jwtTokenHandler = new JwtSecurityTokenHandler();
 
-            var key = Encoding.UTF8.GetBytes(_jwtConfig.Secret);
+            var key = Encoding.UTF8.GetBytes(_configuration.GetSection("JwtConfig:Secret").Value);
 
             var tokenDescriptor = new SecurityTokenDescriptor()
             {
@@ -92,7 +140,7 @@ namespace JwtAPILecture.Controllers
                     new Claim(JwtRegisteredClaimNames.Iat, DateTime.UtcNow.ToString())
                 }),
 
-                Expires = DateTime.Now.AddHours(1),
+                Expires = DateTime.UtcNow.AddHours(1),
                 SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256)
             };
 
