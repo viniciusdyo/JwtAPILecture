@@ -12,5 +12,6 @@ namespace JwtAPILecture.Data
         }
 
         public DbSet<Team> Teams { get; set; }
+        public DbSet<RefreshToken> RefreshTokens { get; set; }
     }
 }

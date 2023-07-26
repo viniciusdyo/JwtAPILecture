@@ -1,4 +1,5 @@
 ﻿using JwtAPILecture.Configurations;
+using JwtAPILecture.Data;
 using JwtAPILecture.Models;
 using JwtAPILecture.Models.DTOs;
 using Microsoft.AspNetCore.Http;
@@ -18,10 +19,14 @@ namespace JwtAPILecture.Controllers
     {
         private readonly UserManager<IdentityUser> _userManager;
         private readonly IConfiguration _configuration;
-        public AuthenticationController(UserManager<IdentityUser> userManager, IConfiguration configuration)
+        private readonly AppDbContext _context;
+        private readonly TokenValidationParameters _tokenValidationParameters;
+        public AuthenticationController(UserManager<IdentityUser> userManager, IConfiguration configuration, AppDbContext context, TokenValidationParameters tokenValidationParameters)
         {
+            _context = context;
             _userManager = userManager;
             _configuration = configuration;
+            _tokenValidationParameters = tokenValidationParameters;
         }
 
         [HttpPost]
@@ -54,13 +59,9 @@ namespace JwtAPILecture.Controllers
 
                 if (is_created.Succeeded)
                 {
-                    var token = GenerateJwtToken(new_user);
+                    var token = await GenerateJwtToken(new_user);
 
-                    return Ok(new AuthResult()
-                    {
-                        Result = true,
-                        Token = token
-                    });
+                    return Ok(token);
                 }
 
                 return BadRequest(new AuthResult()
@@ -108,9 +109,9 @@ namespace JwtAPILecture.Controllers
                         Result = false
                     });
 
-                var jwtToken = GenerateJwtToken(existing_user);
+                var jwtToken = await GenerateJwtToken(existing_user);
 
-                return Ok(new AuthResult() { Result = true, Token = jwtToken });
+                return Ok(jwtToken);
             }
 
             return BadRequest(new AuthResult()
@@ -123,7 +124,7 @@ namespace JwtAPILecture.Controllers
             });
         }
 
-        private string GenerateJwtToken(IdentityUser user)
+        private async Task<AuthResult> GenerateJwtToken(IdentityUser user)
         {
             var jwtTokenHandler = new JwtSecurityTokenHandler();
 
@@ -140,7 +141,7 @@ namespace JwtAPILecture.Controllers
                     new Claim(JwtRegisteredClaimNames.Iat, DateTime.UtcNow.ToString())
                 }),
 
-                Expires = DateTime.UtcNow.AddHours(1),
+                Expires = DateTime.UtcNow.Add(TimeSpan.Parse(_configuration.GetSection("JwtConfig:ExpiryTimeFrame").Value)),
                 SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256)
             };
 
@@ -148,8 +149,29 @@ namespace JwtAPILecture.Controllers
 
             var jwtToken = jwtTokenHandler.WriteToken(token);
 
-            return jwtToken;
-        }
+            var refreshToken = new RefreshToken()
+            {
+                JwtId = token.Id,
+                Token = RandomStringGeneration(32),
+                AddedDate = DateTime.UtcNow,
+                ExpiryTime = DateTime.UtcNow.AddHours(6),
+                IsRevoked = false,
+                IsUsed = false,
+                UserId = user.Id,
+            };
 
+            await _context.RefreshTokens.AddAsync(refreshToken);
+            await _context.SaveChangesAsync();
+
+            var r = new AuthResult() { Token = jwtToken, RefreshToken = refreshToken.Token, Result = true, };
+            return r;
+        }
+        private string RandomStringGeneration(int lenght)
+        {
+            var random = new Random();
+            var chars = "ABCDEFGHIJKLMNOPQRSTUVWYXZ123456789abcdefghijklmnopqrstuvwxyz_";
+
+            return new string(Enumerable.Repeat(chars, lenght).Select(s => s[random.Next(s.Length)]).ToArray());
+        }
     }
 }
